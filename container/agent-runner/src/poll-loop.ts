@@ -1,3 +1,4 @@
+import { policyForTurn } from './turn-policy.js';
 import { findByName, getAllDestinations, type DestinationEntry } from './destinations.js';
 import {
   getPendingMessages,
@@ -374,6 +375,8 @@ export async function processQuery(
 ): Promise<QueryResult> {
   // adoptTurn mutates routing in place; keep the caller's batch route intact.
   routing = { ...routing };
+  let turnPolicy = policyForTurn(initialBatchIds);
+  let retryPending = false;
   let queryContinuation: string | undefined;
   let done = false;
   let unwrappedNudged = false;
@@ -430,6 +433,7 @@ export async function processQuery(
   const queuedTurns: QueuedTurn[] = [];
   const adoptTurn = (next: QueuedTurn): void => {
     Object.assign(routing, next.routing);
+    turnPolicy = policyForTurn(routing.inReplyTo ? [routing.inReplyTo] : []);
     unwrappedNudged = next.unwrappedNudged;
     taskBlockNudged = next.taskBlockNudged;
     publishReplyRoute(routing);
@@ -438,6 +442,7 @@ export async function processQuery(
   // A retry is another provider input, behind any follow-ups already pushed.
   // Preserve its original route, prompt and retry guards until it is answered.
   const pushRetry = (prompt: string): void => {
+    retryPending = true;
     query.push(prompt);
     queuedTurns.push({ routing: { ...routing }, unwrappedNudged, taskBlockNudged });
     archivePrompts.push(archivePrompts[0] ?? initialPrompt);
@@ -461,6 +466,7 @@ export async function processQuery(
 
     void (async () => {
       try {
+        if (answering && turnPolicy?.holdFollowUps) return;
         const pending = getPendingMessages();
 
         // Slash commands need a fresh query: /clear resets the SDK's
@@ -599,6 +605,7 @@ export async function processQuery(
           midTurnTail = scan.tail;
         }
       } else if (event.type === 'result') {
+        retryPending = false;
         // A result — with or without text — means the turn is done. Mark
         // the initial batch completed now so the host sweep doesn't see
         // stale 'processing' claims while the query stays open for
@@ -677,6 +684,7 @@ export async function processQuery(
           // user prompt at their own position in the FIFO queue.
           archivePrompts.shift();
         } else archivePrompts.shift();
+        await turnPolicy?.finish(retryPending);
         // Turn boundary: reset the per-turn sent count after the result's
         // nudge decision has used it. A nudge retry re-counts via its own
         // text events before the retry result, so resetting on every result
@@ -742,6 +750,7 @@ export async function processQuery(
   } finally {
     done = true;
     clearInterval(pollHandle);
+    await turnPolicy?.abandon();
   }
 
   return { continuation: queryContinuation };
