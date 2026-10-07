@@ -39,11 +39,15 @@ import {
 import type { GroupMetadata, WAMessageKey, WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { isSafeAttachmentName } from '../attachment-safety.js';
+import { policyForPlatform } from '../modules/robi-whatsapp/policy.js';
+import { sendWhatsAppText } from './whatsapp-text.js';
+import { findPersistedReactionKey } from './whatsapp-reaction-key-store.js';
 import { DATA_DIR } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { log } from '../log.js';
 import { registerChannelAdapter } from './channel-registry.js';
 import { normalizeOptions, type NormalizedOption } from './ask-question.js';
+import { whatsappMessageId, sendWhatsAppReaction } from './whatsapp-reaction.js';
 import type {
   ChannelAdapter,
   ChannelDefaults,
@@ -429,11 +433,12 @@ registerChannelAdapter('whatsapp', {
     let botPhoneJid: string | undefined;
 
     // Outgoing queue for messages sent while disconnected
-    const outgoingQueue: Array<{ jid: string; text: string; mentions?: string[] }> = [];
+    const outgoingQueue: Array<{ jid: string; text: string; mentions?: string[]; composing?: boolean }> = [];
     let flushing = false;
 
     // Sent message cache for retry/re-encrypt requests
     const sentMessageCache = new Map<string, any>();
+    const reactionKeys = new Map<string, WAMessageKey>();
 
     // Group metadata cache with TTL
     const groupMetadataCache = new Map<string, { metadata: GroupMetadata; expiresAt: number }>();
@@ -555,9 +560,7 @@ registerChannelAdapter('whatsapp', {
         log.info('Flushing outgoing message queue', { count: outgoingQueue.length });
         while (outgoingQueue.length > 0) {
           const item = outgoingQueue.shift()!;
-          const payload: { text: string; mentions?: string[] } = { text: item.text };
-          if (item.mentions && item.mentions.length > 0) payload.mentions = item.mentions;
-          const sent = await sock.sendMessage(item.jid, payload);
+          const sent = await sendWhatsAppText(sock, item.jid, item.text, item.mentions, item.composing);
           if (sent?.key?.id && sent.message) {
             sentMessageCache.set(sent.key.id, sent.message);
           }
@@ -623,16 +626,19 @@ registerChannelAdapter('whatsapp', {
       return { attachments: results, failures };
     }
 
-    async function sendRawMessage(jid: string, text: string, mentions?: string[]): Promise<string | undefined> {
+    async function sendRawMessage(
+      jid: string,
+      text: string,
+      mentions?: string[],
+      composing = false,
+    ): Promise<string | undefined> {
       if (!connected) {
-        outgoingQueue.push({ jid, text, mentions });
+        outgoingQueue.push({ jid, text, mentions, composing });
         log.info('WA disconnected, message queued', { jid, queueSize: outgoingQueue.length });
         return;
       }
       try {
-        const payload: { text: string; mentions?: string[] } = { text };
-        if (mentions && mentions.length > 0) payload.mentions = mentions;
-        const sent = await sock.sendMessage(jid, payload);
+        const sent = await sendWhatsAppText(sock, jid, text, mentions, composing);
         if (sent?.key?.id && sent.message) {
           sentMessageCache.set(sent.key.id, sent.message);
           if (sentMessageCache.size > SENT_MESSAGE_CACHE_MAX) {
@@ -642,7 +648,7 @@ registerChannelAdapter('whatsapp', {
         }
         return sent?.key?.id ?? undefined;
       } catch (err) {
-        outgoingQueue.push({ jid, text, mentions });
+        outgoingQueue.push({ jid, text, mentions, composing });
         log.warn('Failed to send, message queued', { jid, err, queueSize: outgoingQueue.length });
         return undefined;
       }
@@ -829,6 +835,7 @@ registerChannelAdapter('whatsapp', {
       sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const msg of messages) {
           try {
+            const receivedAt = new Date().toISOString();
             if (!msg.message) continue;
             const normalized = normalizeMessageContent(msg.message);
             if (!normalized) continue;
@@ -840,6 +847,12 @@ registerChannelAdapter('whatsapp', {
 
             const timestamp = new Date(Number(msg.messageTimestamp) * 1000).toISOString();
             const isGroup = chatJid.endsWith('@g.us');
+            if (msg.key.id) {
+              reactionKeys.set(`${chatJid}:${msg.key.id}`, { ...msg.key });
+              if (reactionKeys.size > SENT_MESSAGE_CACHE_MAX) {
+                reactionKeys.delete(reactionKeys.keys().next().value!);
+              }
+            }
 
             // Notify metadata for group discovery
             setupConfig.onMetadata(chatJid, undefined, isGroup);
@@ -939,6 +952,8 @@ registerChannelAdapter('whatsapp', {
                 isBotMessage,
                 isGroup,
                 chatJid,
+                receivedAt,
+                whatsappKey: { ...msg.key },
               },
               timestamp,
             };
@@ -1021,14 +1036,17 @@ registerChannelAdapter('whatsapp', {
         // Reaction → emoji on a message
         if (content.operation === 'reaction' && content.messageId && content.emoji) {
           try {
-            await sock.sendMessage(platformId, {
-              react: {
-                text: content.emoji as string,
-                key: { remoteJid: platformId, id: content.messageId as string, fromMe: false },
-              },
-            });
+            await sendWhatsAppReaction(
+              sock,
+              platformId,
+              content.messageId as string,
+              content.emoji as string,
+              reactionKeys.get(`${platformId}:${whatsappMessageId(content.messageId as string)}`) ??
+                (await findPersistedReactionKey(platformId, content.messageId as string)),
+            );
           } catch (err) {
-            log.debug('Failed to send reaction', { platformId, err });
+            log.error('Failed to send WhatsApp reaction', { platformId, err });
+            throw err;
           }
           return;
         }
@@ -1069,11 +1087,12 @@ registerChannelAdapter('whatsapp', {
         if (text) {
           const { text: formatted, mentions } = formatWhatsApp(text);
           const prefixed = WHATSAPP_SHARED ? `${ASSISTANT_NAME}: ${formatted}` : formatted;
-          return sendRawMessage(platformId, prefixed, mentions);
+          return sendRawMessage(platformId, prefixed, mentions, !!policyForPlatform(platformId));
         }
       },
 
       async setTyping(platformId: string) {
+        if (policyForPlatform(platformId)) return;
         try {
           await sock.sendPresenceUpdate('composing', platformId);
         } catch (err) {

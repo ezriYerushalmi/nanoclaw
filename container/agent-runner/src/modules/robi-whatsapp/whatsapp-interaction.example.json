@@ -1,0 +1,5 @@
+{
+  "platformIds": ["<WHATSAPP_GROUP_ID>@g.us"],
+  "acknowledgeSender": "whatsapp:<OWNER_PHONE_IN_INTERNATIONAL_FORMAT>@s.whatsapp.net",
+  "debounceMs": 3000
+}

@@ -1,5 +1,5 @@
-/** Singular mailbox composition slot. See docs/agent-mailbox-seam-migration.md. */
+/** Singular mailbox composition slot: native storage with an opt-in interaction decorator. */
 import { registerAgentMailbox } from './index.js';
 import { SqliteAgentMailbox } from './sqlite/index.js';
-
-registerAgentMailbox(() => new SqliteAgentMailbox());
+import { robiMailbox } from '../modules/robi-whatsapp/mailbox.js';
+registerAgentMailbox(() => robiMailbox(new SqliteAgentMailbox()));
