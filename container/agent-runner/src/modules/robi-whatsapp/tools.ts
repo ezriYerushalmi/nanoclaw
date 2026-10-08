@@ -2,6 +2,8 @@ import { getAgentMailbox } from '../../mailbox/index.js';
 import { registerTools } from '../../mcp-tools/server.js';
 import { readPolicy } from './policy.js';
 import { silenceHumanConversation } from './mailbox.js';
+import './health-tools.js';
+import './vision/tools.js';
 // Scoped registration: unconfigured agent workspaces do not expose this tool.
 if (readPolicy())
   registerTools([

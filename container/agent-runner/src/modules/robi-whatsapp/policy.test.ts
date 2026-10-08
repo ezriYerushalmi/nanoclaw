@@ -151,3 +151,19 @@ it('holds a new arrival without invoking a turn and recovers held rows after run
   expect(restarted.operations.getPendingMessages(10, true).map((row) => row.id)).toEqual([m.id]);
   expect(native.getState('robi:active')).toBeUndefined();
 });
+
+it('system replies do not starve a ready WhatsApp burst and failed held rows are discarded', () => {
+  const native = new SqliteAgentMailbox();
+  const mailbox = robiMailbox(native, policy, false);
+  const m = row(2, Date.now() - 10000);
+  getInboundDb()
+    .prepare(`INSERT INTO messages_in (id,seq,kind,timestamp,platform_id,channel_type,content) VALUES (?,?,?,?,?,?,?)`)
+    .run(m.id, 2, m.kind, m.timestamp, m.platformId, m.channelType, m.content);
+  getInboundDb()
+    .prepare(`INSERT INTO messages_in (id,seq,kind,timestamp,content) VALUES (?,?,?,?,?)`)
+    .run('system-reply', 4, 'system', m.timestamp, '{}');
+  expect(mailbox.operations.getPendingMessages(10, true).map((r) => r.id)).toEqual([m.id]);
+  getInboundDb().prepare("UPDATE messages_in SET status='failed' WHERE id=?").run(m.id);
+  expect(mailbox.operations.getPendingMessages(10, false).map((r) => r.id)).toEqual(['system-reply']);
+  expect(JSON.parse(native.getState('robi:held')!.value)).toEqual([]);
+});

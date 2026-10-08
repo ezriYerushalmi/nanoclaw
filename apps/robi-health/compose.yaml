@@ -1,0 +1,82 @@
+name: robi-health
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: robi-postgres
+    environment:
+      POSTGRES_DB: robi_db
+      POSTGRES_USER: robi_db_admin
+      POSTGRES_PASSWORD: ${ROBI_DB_ADMIN_PASSWORD:?Run init first}
+    volumes:
+      - robi_postgres_data:/var/lib/postgresql/data
+    networks:
+      - database
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U robi_db_admin -d robi_db']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  health:
+    image: ${ROBI_IMAGE:?Set installed NanoClaw image}
+    container_name: robi-health-service
+    entrypoint: [bun, /robi/src/cli.ts]
+    command: [serve]
+    environment:
+      ROBI_DB_HOST: postgres
+      ROBI_DB_PASSWORD: ${ROBI_DB_PASSWORD:?Run init first}
+      ROBI_GROUP_PATH: /config
+      ROBI_SESSIONS_PATH: /sessions
+      ROBI_POLICY_PATH: /authority/policy.json
+    volumes:
+      - ./src:/robi/src:ro
+      - ./migrations:/robi/migrations:ro
+      - ./tests:/robi/tests:ro
+      - ${ROBI_GROUP_DIR:?Set Robi group directory}:/config:ro
+      - ${ROBI_SESSIONS_DIR:?Set Robi session directory}:/sessions:ro
+      - ${ROBI_AUTHORITY_FILE:?Run init first}:/authority/policy.json:ro
+    networks:
+      - database
+      - api
+    ports:
+      - '127.0.0.1:${ROBI_API_PORT:-18765}:18765'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: [CMD, bun, /robi/src/cli.ts, healthcheck]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  admin:
+    image: ${ROBI_IMAGE:?Set installed NanoClaw image}
+    profiles: [admin]
+    entrypoint: [bun, /robi/src/cli.ts]
+    environment:
+      ROBI_DB_HOST: postgres
+      ROBI_DB_ADMIN_PASSWORD: ${ROBI_DB_ADMIN_PASSWORD:?Run init first}
+      ROBI_DB_PASSWORD: ${ROBI_DB_PASSWORD:?Run init first}
+      ROBI_GROUP_PATH: /config
+    volumes:
+      - ./src:/robi/src:ro
+      - ./migrations:/robi/migrations:ro
+      - ./tests:/robi/tests:ro
+      - ${ROBI_GROUP_DIR:?Set Robi group directory}:/config:ro
+    networks:
+      - database
+    depends_on:
+      postgres:
+        condition: service_healthy
+networks:
+  database:
+    name: robi_database
+    internal: true
+  api:
+    name: robi_api
+volumes:
+  robi_postgres_data:
+    name: robi_postgres_data

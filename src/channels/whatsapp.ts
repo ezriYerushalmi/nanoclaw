@@ -39,6 +39,7 @@ import {
 import type { GroupMetadata, WAMessageKey, WAMessage, WASocket } from '@whiskeysockets/baileys';
 
 import { isSafeAttachmentName } from '../attachment-safety.js';
+import { imageAttachment, type WhatsAppImageAttachment } from './whatsapp-image.js';
 import { policyForPlatform } from '../modules/robi-whatsapp/policy.js';
 import { sendWhatsAppText } from './whatsapp-text.js';
 import { findPersistedReactionKey } from './whatsapp-reaction-key-store.js';
@@ -576,7 +577,7 @@ registerChannelAdapter('whatsapp', {
       msg: WAMessage,
       normalized: any,
     ): Promise<{
-      attachments: Array<{ type: string; name: string; localPath: string }>;
+      attachments: Array<{ type: string; name: string; localPath: string } | WhatsAppImageAttachment>;
       failures: string[];
     }> {
       const mediaTypes: Array<{ key: string; type: string; ext: string }> = [
@@ -585,7 +586,7 @@ registerChannelAdapter('whatsapp', {
         { key: 'audioMessage', type: 'audio', ext: '.ogg' },
         { key: 'documentMessage', type: 'document', ext: '' },
       ];
-      const results: Array<{ type: string; name: string; localPath: string }> = [];
+      const results: Array<{ type: string; name: string; localPath: string } | WhatsAppImageAttachment> = [];
       const failures: string[] = [];
       for (const { key, type, ext } of mediaTypes) {
         if (!normalized[key]) continue;
@@ -600,6 +601,10 @@ registerChannelAdapter('whatsapp', {
             {},
             { reuploadRequest: sock.updateMediaMessage, logger: baileysLogger },
           );
+          if (type === 'image') {
+            results.push(imageAttachment(buffer, msg.key.id ?? null));
+            continue;
+          }
           // documentMessage.fileName is attacker-controlled and rides through
           // WhatsApp's E2E channel — Meta can't sanitize it server-side. Without
           // this guard, a `..`-laden fileName escapes attachDir on path.join.
@@ -932,6 +937,7 @@ registerChannelAdapter('whatsapp', {
                   !hasMentionPills(normalized) &&
                   isBotTypedMention(content, ASSISTANT_NAME, botPhoneJid)));
 
+            const replyContext = normalized.imageMessage?.contextInfo ?? normalized.extendedTextMessage?.contextInfo;
             const inbound: InboundMessage = {
               id: msg.key.id || `wa-${Date.now()}`,
               kind: 'chat',
@@ -953,6 +959,17 @@ registerChannelAdapter('whatsapp', {
                 isGroup,
                 chatJid,
                 receivedAt,
+                ...(replyContext?.stanzaId
+                  ? {
+                      replyTo: {
+                        id: replyContext?.stanzaId,
+                        sender: replyContext?.participant,
+                        text:
+                          replyContext?.quotedMessage?.conversation ??
+                          replyContext?.quotedMessage?.imageMessage?.caption,
+                      },
+                    }
+                  : {}),
                 whatsappKey: { ...msg.key },
               },
               timestamp,

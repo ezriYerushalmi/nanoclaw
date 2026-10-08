@@ -12,6 +12,10 @@ const HELD = 'robi:held';
 const ACTIVE = 'robi:active';
 const DRAFTS = 'robi:drafts';
 const SILENT = 'robi:human-conversation';
+let imageReviewAck: (() => Promise<void>) | undefined;
+export async function acknowledgeImageReview(): Promise<void> {
+  await imageReviewAck?.();
+}
 interface Active {
   rows: InboundMessage[];
   acknowledge: boolean;
@@ -27,6 +31,22 @@ export function robiMailbox(base: AgentMailbox, policy: Policy | null = readPoli
   let startedTurn = false;
   const active = (): Active | null => read<Active | null>(ACTIVE, null);
   const drafts = (): OutboundMessage[] => read<OutboundMessage[]>(DRAFTS, []);
+  imageReviewAck = async () => {
+    const last = active()?.rows.at(-1);
+    if (!last || native.getState('robi:image-review')?.value === last.id) return;
+    // Only invoked after burst selection and successful local image loading.
+    // Use native reaction delivery; never presence or text.
+    await native.writeMessageOut({
+      id: `msg-${randomUUID()}`,
+      kind: 'chat',
+      platformId: last.platformId,
+      channelType: last.channelType,
+      threadId: last.threadId,
+      inReplyTo: last.id,
+      content: JSON.stringify({ operation: 'reaction', messageId: last.id, emoji: '👀' }),
+    });
+    native.setState('robi:image-review', last.id);
+  };
   const begin = (ids: readonly string[]) => {
     if (!policy || !ids.length) return undefined;
     const held = read<InboundMessage[]>(HELD, []);
@@ -99,8 +119,12 @@ export function robiMailbox(base: AgentMailbox, policy: Policy | null = readPoli
             native.deleteState(DRAFTS);
             native.deleteState(SILENT);
           }
-          const held = read<InboundMessage[]>(HELD, []);
+          const held = read<InboundMessage[]>(HELD, []).filter((row) => {
+            const current = native.getMessageIn(row.id);
+            return current && (current.status === 'pending' || current.status === 'processing');
+          });
           const known = new Set(held.map((row) => row.id));
+          native.setState(HELD, JSON.stringify(held));
           let ordinary: InboundMessage[] = [];
           // Drain normal-sized native pages into durable held state, without a 10,000-row read.
           // Claims prevent the same page reappearing; no provider invocation occurs until quiet.
@@ -123,7 +147,9 @@ export function robiMailbox(base: AgentMailbox, policy: Policy | null = readPoli
             if (ordinary.length || page.length < limit || !selected.length) break;
           }
           // Restart recovery: held rows remain available even if their claims were cleared.
-          return ordinary.length ? ordinary : active() ? [] : selectBurst(held, policy);
+          if (ordinary.some((row) => row.kind !== 'system' && row.trigger)) return ordinary;
+          const burst = active() ? [] : selectBurst(held, policy);
+          return burst.length ? burst : ordinary;
         };
       if (property === 'markMessages')
         return (ids: string[], status: Parameters<MailboxOperations['markMessages']>[1]) => {

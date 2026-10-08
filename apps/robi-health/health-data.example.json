@@ -1,0 +1,6 @@
+{
+  "apiUrl": "http://host.docker.internal:18765",
+  "user": { "externalKey": "robi-primary-user", "displayName": "Ezri", "timezone": "Asia/Jerusalem" },
+  "waterGlassMl": null,
+  "waterTargetMl": null
+}

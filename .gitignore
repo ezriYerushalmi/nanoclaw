@@ -37,6 +37,9 @@ groups
 start-nanoclaw.sh
 nanoclaw.pid
 
+# Personal Claude Code overrides (machine/user-specific)
+.claude/settings.local.json
+
 # OS
 .DS_Store
 
