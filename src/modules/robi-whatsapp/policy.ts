@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { GROUPS_DIR } from '../../config.js';
+import './garmin-actions.js';
 
 export interface WhatsAppInteractionPolicy {
   platformIds: string[];

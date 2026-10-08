@@ -48,7 +48,7 @@ afterAll(async () => {
   await admin.close({ timeout: 1 });
 });
 beforeEach(async () => {
-  await db`TRUNCATE water_entries,weight_entries,users`;
+  await db`TRUNCATE users CASCADE`;
   await new UserRepository(db).ensureUser(config);
   service = new HealthService(db, config, () => now);
 });

@@ -2,7 +2,10 @@ import type { SQL } from 'bun';
 import { HealthError, record, type Operation } from '../domain.js';
 import type { HealthService, TrustedInteraction } from '../services/health.js';
 import { resolveInteraction } from '../runtime/authority.js';
-const operations: Operation[] = ['log_weight', 'log_water', 'get_today_status'];
+import { garminOperations, type GarminOperation } from '../garmin/types.js';
+import { GarminReadService } from '../garmin/read-service.js';
+import { settings } from '../config.js';
+const operations: Operation[] = ['log_weight', 'log_water', 'get_today_status', ...garminOperations];
 export function handler(db: SQL, service: HealthService, resolve = resolveInteraction) {
   return async (request: Request): Promise<Response> => {
     try {
@@ -38,6 +41,10 @@ export function handler(db: SQL, service: HealthService, resolve = resolveIntera
         undefined,
         input.sourceMessageIndex,
       );
+      if (garminOperations.includes(operation as GarminOperation))
+        return Response.json(
+          await new GarminReadService(db, settings()).execute(operation as GarminOperation, body.input, context),
+        );
       return Response.json(await service.execute(operation, body.input, context));
     } catch (error: unknown) {
       const reason = error instanceof HealthError ? error.reason : 'health_service_error';

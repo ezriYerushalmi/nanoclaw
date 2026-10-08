@@ -58,7 +58,13 @@ export async function invokeHealthTool(name: string, args: Record<string, unknow
         ? ['amount', 'unit', 'consumedAt', 'sourceMessageIndex']
         : name === 'get_today_status'
           ? []
-          : null;
+          : name === 'get_workout_details'
+            ? ['workoutId']
+            : name === 'get_recent_workouts'
+              ? ['days', 'limit']
+              : ['get_recovery_status', 'get_training_status'].includes(name)
+                ? ['date']
+                : null;
   if (!allowed || Object.keys(args).some((key) => !allowed.includes(key)))
     return { success: false, reason: 'unexpected_argument' };
   const config: unknown = JSON.parse(fs.readFileSync('/workspace/agent/health-data.json', 'utf8'));

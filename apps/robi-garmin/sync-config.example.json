@@ -1,0 +1,5 @@
+{
+  "dailyDays": 14,
+  "activityDays": 30,
+  "dockerBinary": "/Applications/Docker.app/Contents/Resources/bin/docker"
+}

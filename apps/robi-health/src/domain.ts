@@ -1,4 +1,4 @@
-export type Operation = 'log_weight' | 'log_water' | 'get_today_status';
+export type Operation = 'log_weight' | 'log_water' | 'get_today_status' | import('./garmin/types.js').GarminOperation;
 export interface SourceMetadata {
   channel: string;
   messageId: string;
